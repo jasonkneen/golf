@@ -12,6 +12,7 @@ from golf.auth.factory import (
     _create_remote_provider,
     _create_oauth_proxy_provider,
 )
+from golf.core.builder_auth import _config_has_callables
 
 
 class TestJWTProviderCreation:
@@ -615,3 +616,64 @@ class TestOAuthProxyDynamicRedirectUris:
 
         # Validator should now accept the new URI
         assert config.redirect_uri_validator("https://new-uri.example.com/callback") is True
+
+
+class TestConfigHasCallables:
+    """Test the _config_has_callables helper function for builder_auth."""
+
+    def _create_base_config(self, **kwargs) -> OAuthProxyConfig:
+        """Create a base OAuth proxy config with required fields for testing."""
+        token_verifier = StaticTokenConfig(tokens={"test-token": {"client_id": "test", "scopes": ["read"]}})
+        defaults = {
+            "authorization_endpoint": "https://auth.example.com/authorize",
+            "token_endpoint": "https://auth.example.com/token",
+            "client_id": "test-client",
+            "client_secret": "test-secret",
+            "base_url": "https://proxy.example.com",
+            "token_verifier_config": token_verifier,
+        }
+        defaults.update(kwargs)
+        return OAuthProxyConfig(**defaults)
+
+    def test_config_without_callables_returns_false(self) -> None:
+        """Test that config without callable fields returns False."""
+        config = self._create_base_config(
+            allowed_redirect_patterns=["https://example.com/*"],
+            allowed_redirect_schemes=["https"],
+        )
+        assert _config_has_callables(config) is False
+
+    def test_config_with_patterns_func_returns_true(self) -> None:
+        """Test that config with allowed_redirect_patterns_func returns True."""
+        config = self._create_base_config(
+            allowed_redirect_patterns_func=lambda: ["https://example.com/*"],
+        )
+        assert _config_has_callables(config) is True
+
+    def test_config_with_schemes_func_returns_true(self) -> None:
+        """Test that config with allowed_redirect_schemes_func returns True."""
+        config = self._create_base_config(
+            allowed_redirect_schemes_func=lambda: ["myapp"],
+        )
+        assert _config_has_callables(config) is True
+
+    def test_config_with_validator_returns_true(self) -> None:
+        """Test that config with redirect_uri_validator returns True."""
+        config = self._create_base_config(
+            redirect_uri_validator=lambda uri: True,
+        )
+        assert _config_has_callables(config) is True
+
+    def test_jwt_config_returns_false(self) -> None:
+        """Test that JWT config (no callable fields) returns False."""
+        config = JWTAuthConfig(
+            jwks_uri="https://auth.example.com/.well-known/jwks.json",
+            issuer="https://auth.example.com",
+            audience="my-api",
+        )
+        assert _config_has_callables(config) is False
+
+    def test_static_token_config_returns_false(self) -> None:
+        """Test that StaticTokenConfig (no callable fields) returns False."""
+        config = StaticTokenConfig(tokens={"test-token": {"client_id": "test", "scopes": ["read"]}})
+        assert _config_has_callables(config) is False
