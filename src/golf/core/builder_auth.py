@@ -10,6 +10,27 @@ from golf.auth.api_key import get_api_key_config
 from golf.auth.providers import AuthConfig
 
 
+def _config_has_callables(config: AuthConfig) -> bool:
+    """Check if an auth config has any callable fields that can't be serialized.
+
+    Callable fields (like allowed_redirect_patterns_func) cannot be embedded
+    in generated code using repr(), so configs with callables need to use
+    runtime config loading instead.
+    """
+    # Check for OAuthProxyConfig callable fields
+    callable_fields = [
+        "allowed_redirect_patterns_func",
+        "allowed_redirect_schemes_func",
+        "redirect_uri_validator",
+    ]
+
+    for field_name in callable_fields:
+        if hasattr(config, field_name) and getattr(config, field_name) is not None:
+            return True
+
+    return False
+
+
 def generate_auth_code(
     server_name: str,
     host: str = "localhost",
@@ -47,29 +68,60 @@ def generate_auth_code(
             "Please update your auth.py file."
         )
 
-    # Generate modern auth components with embedded configuration
-    auth_imports = [
-        "import os",
-        "import sys",
-        "from golf.auth.factory import create_auth_provider",
-        "from golf.auth.providers import RemoteAuthConfig, JWTAuthConfig, StaticTokenConfig, OAuthServerConfig, OAuthProxyConfig",
-    ]
+    # Check if the auth config has callable fields (can't be embedded with repr)
+    has_callable_fields = _config_has_callables(auth_config)
 
-    # Embed the auth configuration directly in the generated code
-    # Convert the auth config to its string representation for embedding
-    auth_config_repr = repr(auth_config)
+    if has_callable_fields:
+        # For configs with callables, import and use auth module at runtime
+        # auth.py is copied to dist and imported to register the config
+        auth_imports = [
+            "import os",
+            "import sys",
+            "from golf.auth import get_auth_config",
+            "from golf.auth.factory import create_auth_provider",
+            "# Import auth module to execute configure_*() and register auth config",
+            "import auth  # noqa: F401 - executes auth.py to register config",
+        ]
 
-    setup_code_lines = [
-        "# Modern FastMCP 2.11+ authentication setup with embedded configuration",
-        f"auth_config = {auth_config_repr}",
-        "try:",
-        "    auth_provider = create_auth_provider(auth_config)",
-        "    # Authentication configured with {auth_config.provider_type} provider",
-        "except Exception as e:",
-        "    print(f'Authentication setup failed: {e}', file=sys.stderr)",
-        "    auth_provider = None",
-        "",
-    ]
+        setup_code_lines = [
+            "# Modern FastMCP 2.11+ authentication setup (runtime config with callables)",
+            "# Auth config registered by auth.py import above",
+            "auth_config = get_auth_config()",
+            "try:",
+            "    auth_provider = create_auth_provider(auth_config)",
+            f"    # Authentication configured with {auth_config.provider_type} provider",
+            "except Exception as e:",
+            "    print(f'Authentication setup failed: {{e}}', file=sys.stderr)",
+            "    auth_provider = None",
+            "",
+        ]
+    else:
+        # For configs without callables, embed the configuration directly
+        auth_imports = [
+            "import os",
+            "import sys",
+            "from golf.auth.factory import create_auth_provider",
+            "from golf.auth.providers import (",
+            "    RemoteAuthConfig, JWTAuthConfig, StaticTokenConfig,",
+            "    OAuthServerConfig, OAuthProxyConfig,",
+            ")",
+        ]
+
+        # Embed the auth configuration directly in the generated code
+        # Convert the auth config to its string representation for embedding
+        auth_config_repr = repr(auth_config)
+
+        setup_code_lines = [
+            "# Modern FastMCP 2.11+ authentication setup with embedded configuration",
+            f"auth_config = {auth_config_repr}",
+            "try:",
+            "    auth_provider = create_auth_provider(auth_config)",
+            f"    # Authentication configured with {auth_config.provider_type} provider",
+            "except Exception as e:",
+            "    print(f'Authentication setup failed: {{e}}', file=sys.stderr)",
+            "    auth_provider = None",
+            "",
+        ]
 
     # FastMCP constructor arguments - FastMCP 2.11+ uses auth parameter
     fastmcp_args = {"auth": "auth_provider"}
@@ -79,6 +131,7 @@ def generate_auth_code(
         "setup_code": setup_code_lines,
         "fastmcp_args": fastmcp_args,
         "has_auth": True,
+        "copy_auth_file": has_callable_fields,  # Copy auth.py to dist for runtime loading
     }
 
 

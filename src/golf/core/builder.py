@@ -861,6 +861,16 @@ class CodeGenerator:
             transport=self.settings.transport,
         )
 
+        # Copy auth.py to dist if it contains callable fields (dynamic config)
+        if auth_components.get("copy_auth_file"):
+            auth_src = self.project_path / "auth.py"
+            auth_dst = self.output_dir / "auth.py"
+            if auth_src.exists():
+                shutil.copy(auth_src, auth_dst)
+                console.print("[dim]Copied auth.py for runtime configuration[/dim]")
+            else:
+                console.print("[yellow]Warning: auth.py not found but copy_auth_file was requested[/yellow]")
+
         # Create imports section
         imports = [
             "from fastmcp import FastMCP",
