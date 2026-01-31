@@ -1548,7 +1548,14 @@ class CodeGenerator:
             starlette_middleware = []
 
             # FastMCP middleware methods (MCP protocol level)
-            fastmcp_methods = ["on_message", "on_request", "on_call_tool", "on_read_resource", "on_get_prompt", "on_initialize"]
+            fastmcp_methods = [
+                "on_message",
+                "on_request",
+                "on_call_tool",
+                "on_read_resource",
+                "on_get_prompt",
+                "on_initialize",
+            ]
             # Starlette/ASGI middleware method (HTTP level)
             starlette_method = "dispatch"
 
