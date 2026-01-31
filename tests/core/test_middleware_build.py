@@ -303,3 +303,87 @@ class NotMiddleware:
         assert "mcp.add_middleware(DuckTypedAuth())" in server_content
         # Non-middleware class should not be included
         assert "NotMiddleware" not in server_content
+
+    def test_starlette_http_middleware_build(self, sample_project: Path, temp_dir: Path):
+        """Test Starlette HTTP middleware (e.g., CacheControlMiddleware) is registered correctly.
+
+        Starlette middleware uses the dispatch() method and must be passed to mcp.run(middleware=[])
+        instead of mcp.add_middleware() which is for FastMCP protocol-level middleware.
+        """
+        middleware_file = sample_project / "middleware.py"
+        middleware_file.write_text('''
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
+from typing import Callable, Any
+
+
+class CacheControlMiddleware(BaseHTTPMiddleware):
+    """Middleware to add Cache-Control headers to all responses."""
+
+    async def dispatch(self, request: Request, call_next: Callable[..., Any]) -> Response:
+        response = await call_next(request)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+''')
+
+        settings = load_settings(sample_project)
+        output_dir = temp_dir / "build"
+        build_project(sample_project, settings, output_dir, build_env="dev", copy_env=False)
+
+        server_content = (output_dir / "server.py").read_text()
+
+        # Starlette middleware should be imported
+        assert "from middleware import CacheControlMiddleware" in server_content
+
+        # Should NOT be registered via mcp.add_middleware() - that would fail!
+        assert "mcp.add_middleware(CacheControlMiddleware())" not in server_content
+
+        # Should be added to the middleware list for mcp.run()
+        assert "Middleware(CacheControlMiddleware)" in server_content
+
+    def test_mixed_fastmcp_and_starlette_middleware_build(self, sample_project: Path, temp_dir: Path):
+        """Test that both FastMCP and Starlette middleware can be used together."""
+        middleware_file = sample_project / "middleware.py"
+        middleware_file.write_text('''
+from starlette.middleware.base import BaseHTTPMiddleware
+from golf.middleware import Middleware as FastMCPMiddleware
+from typing import Callable, Any
+
+
+class LoggingMiddleware(FastMCPMiddleware):
+    """FastMCP middleware for logging MCP operations."""
+
+    async def on_call_tool(self, context, call_next):
+        print(f"Calling tool: {context.message.params.name}")
+        return await call_next(context)
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Starlette middleware for adding security headers."""
+
+    async def dispatch(self, request, call_next: Callable[..., Any]):
+        response = await call_next(request)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
+''')
+
+        settings = load_settings(sample_project)
+        output_dir = temp_dir / "build"
+        build_project(sample_project, settings, output_dir, build_env="dev", copy_env=False)
+
+        server_content = (output_dir / "server.py").read_text()
+
+        # Both middleware should be imported
+        assert "LoggingMiddleware" in server_content
+        assert "SecurityHeadersMiddleware" in server_content
+
+        # FastMCP middleware should use mcp.add_middleware()
+        assert "mcp.add_middleware(LoggingMiddleware())" in server_content
+
+        # Starlette middleware should NOT use mcp.add_middleware()
+        assert "mcp.add_middleware(SecurityHeadersMiddleware())" not in server_content
+
+        # Starlette middleware should be in the middleware list for mcp.run()
+        assert "Middleware(SecurityHeadersMiddleware)" in server_content

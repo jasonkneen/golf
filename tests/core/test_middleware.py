@@ -24,9 +24,11 @@ class NotMiddleware:
 
         settings = load_settings(sample_project)
         generator = CodeGenerator(sample_project, settings, temp_dir)
-        middleware_classes = generator._discover_middleware_classes(sample_project)
-        
-        assert middleware_classes == ["LoggingMiddleware"]
+        discovered = generator._discover_middleware_classes(sample_project)
+
+        # FastMCP middleware (on_call_tool method)
+        assert discovered["fastmcp"] == ["LoggingMiddleware"]
+        assert discovered["starlette"] == []
 
     def test_discovers_multiple_middleware_methods(self, sample_project: Path, temp_dir: Path):
         """Test discovery of middleware with different methods."""
@@ -49,18 +51,20 @@ class DispatchMiddleware(Middleware):
 
         settings = load_settings(sample_project)
         generator = CodeGenerator(sample_project, settings, temp_dir)
-        middleware_classes = generator._discover_middleware_classes(sample_project)
-        
-        # Should discover all three middleware classes
-        assert set(middleware_classes) == {"MessageMiddleware", "RequestMiddleware", "DispatchMiddleware"}
+        discovered = generator._discover_middleware_classes(sample_project)
+
+        # FastMCP middleware (on_message, on_request methods)
+        assert set(discovered["fastmcp"]) == {"MessageMiddleware", "RequestMiddleware"}
+        # Starlette HTTP middleware (dispatch method)
+        assert discovered["starlette"] == ["DispatchMiddleware"]
 
     def test_no_middleware_when_file_missing(self, sample_project: Path, temp_dir: Path):
         """Test graceful handling when middleware.py doesn't exist."""
         settings = load_settings(sample_project)
         generator = CodeGenerator(sample_project, settings, temp_dir)
-        middleware_classes = generator._discover_middleware_classes(sample_project)
-        
-        assert middleware_classes == []
+        discovered = generator._discover_middleware_classes(sample_project)
+
+        assert discovered == {"fastmcp": [], "starlette": []}
 
     def test_ignores_classes_without_middleware_methods(self, sample_project: Path, temp_dir: Path):
         """Test that classes without middleware methods are ignored."""
@@ -83,9 +87,10 @@ class AnotherClass(Middleware):
 
         settings = load_settings(sample_project)
         generator = CodeGenerator(sample_project, settings, temp_dir)
-        middleware_classes = generator._discover_middleware_classes(sample_project)
-        
-        assert middleware_classes == ["ValidMiddleware"]
+        discovered = generator._discover_middleware_classes(sample_project)
+
+        assert discovered["fastmcp"] == ["ValidMiddleware"]
+        assert discovered["starlette"] == []
 
 
 class TestMiddlewareCodeGeneration:
@@ -168,9 +173,10 @@ class TestMiddleware(Middleware):
 
         settings = load_settings(sample_project)
         generator = CodeGenerator(sample_project, settings, temp_dir)
-        middleware_classes = generator._discover_middleware_classes(sample_project)
-        
-        assert middleware_classes == []  # Should return empty list on error
+        discovered = generator._discover_middleware_classes(sample_project)
+
+        # Should return empty dict on error
+        assert discovered == {"fastmcp": [], "starlette": []}
 
     def test_handles_import_error(self, sample_project: Path, temp_dir: Path):
         """Test graceful handling of import errors."""
@@ -185,9 +191,10 @@ class TestMiddleware:
 
         settings = load_settings(sample_project)
         generator = CodeGenerator(sample_project, settings, temp_dir)
-        middleware_classes = generator._discover_middleware_classes(sample_project)
-        
-        assert middleware_classes == []  # Should return empty list on error
+        discovered = generator._discover_middleware_classes(sample_project)
+
+        # Should return empty dict on error
+        assert discovered == {"fastmcp": [], "starlette": []}
 
     def test_build_succeeds_with_broken_middleware(self, sample_project: Path, temp_dir: Path):
         """Test that broken middleware doesn't break the build process."""
@@ -226,9 +233,10 @@ class TestMiddleware:
 
         settings = load_settings(sample_project)
         generator = CodeGenerator(sample_project, settings, temp_dir)
-        middleware_classes = generator._discover_middleware_classes(sample_project)
-        
-        assert middleware_classes == []  # Should return empty list on error
+        discovered = generator._discover_middleware_classes(sample_project)
+
+        # Should return empty dict on error
+        assert discovered == {"fastmcp": [], "starlette": []}
 
     def test_handles_empty_middleware_file(self, sample_project: Path, temp_dir: Path):
         """Test handling of empty middleware.py file."""
@@ -237,9 +245,9 @@ class TestMiddleware:
 
         settings = load_settings(sample_project)
         generator = CodeGenerator(sample_project, settings, temp_dir)
-        middleware_classes = generator._discover_middleware_classes(sample_project)
-        
-        assert middleware_classes == []
+        discovered = generator._discover_middleware_classes(sample_project)
+
+        assert discovered == {"fastmcp": [], "starlette": []}
 
 
 class TestMiddlewareDuckTyping:
@@ -265,12 +273,15 @@ class NotMiddleware:
 
         settings = load_settings(sample_project)
         generator = CodeGenerator(sample_project, settings, temp_dir)
-        middleware_classes = generator._discover_middleware_classes(sample_project)
-        
-        assert len(middleware_classes) == 2
-        assert "DuckTypedMiddleware" in middleware_classes
-        assert "AlsoMiddleware" in middleware_classes
-        assert "NotMiddleware" not in middleware_classes
+        discovered = generator._discover_middleware_classes(sample_project)
+
+        # FastMCP middleware (on_call_tool method)
+        assert discovered["fastmcp"] == ["DuckTypedMiddleware"]
+        # Starlette HTTP middleware (dispatch method)
+        assert discovered["starlette"] == ["AlsoMiddleware"]
+        # NotMiddleware should not appear in either list
+        all_middleware = discovered["fastmcp"] + discovered["starlette"]
+        assert "NotMiddleware" not in all_middleware
 
     def test_discovers_mixed_middleware_types(self, sample_project: Path, temp_dir: Path):
         """Test discovery of middleware with and without base class."""
@@ -293,12 +304,14 @@ class NoMiddlewareMethods:
 
         settings = load_settings(sample_project)
         generator = CodeGenerator(sample_project, settings, temp_dir)
-        middleware_classes = generator._discover_middleware_classes(sample_project)
-        
-        assert len(middleware_classes) == 2
-        assert "InheritedMiddleware" in middleware_classes
-        assert "DuckTypedMiddleware" in middleware_classes
-        assert "NoMiddlewareMethods" not in middleware_classes
+        discovered = generator._discover_middleware_classes(sample_project)
+
+        # Both are FastMCP middleware (on_message, on_call_tool methods)
+        assert set(discovered["fastmcp"]) == {"InheritedMiddleware", "DuckTypedMiddleware"}
+        assert discovered["starlette"] == []
+        # NoMiddlewareMethods should not appear
+        all_middleware = discovered["fastmcp"] + discovered["starlette"]
+        assert "NoMiddlewareMethods" not in all_middleware
 
 
 class TestMiddlewareRegistrationOrder:

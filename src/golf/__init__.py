@@ -1,4 +1,4 @@
-__version__ = "0.3.0rc3"
+__version__ = "0.3.0rc5"
 
 from golf.decorators import prompt, resource, tool
 
