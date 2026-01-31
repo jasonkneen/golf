@@ -1227,15 +1227,22 @@ class CodeGenerator:
             component_registrations.append("")
 
         # Check for custom middleware.py file and register middleware classes
-        middleware_classes = self._discover_middleware_classes(self.project_path)
-        if middleware_classes:
+        discovered_middleware = self._discover_middleware_classes(self.project_path)
+        fastmcp_middleware = discovered_middleware.get("fastmcp", [])
+        starlette_middleware = discovered_middleware.get("starlette", [])
+
+        # Import all middleware classes
+        all_middleware = fastmcp_middleware + starlette_middleware
+        if all_middleware:
             imports.append("# Import custom middleware")
-            imports.append("from middleware import " + ", ".join(middleware_classes))
+            imports.append("from middleware import " + ", ".join(all_middleware))
             imports.append("")
 
-            for cls_name in middleware_classes:
-                # Add each discovered middleware class to FastMCP
-                component_registrations.append(f"# Register custom middleware: {cls_name}")
+        # Register only FastMCP middleware via mcp.add_middleware()
+        # Starlette HTTP middleware will be added to mcp.run(middleware=[...]) later
+        if fastmcp_middleware:
+            for cls_name in fastmcp_middleware:
+                component_registrations.append(f"# Register custom FastMCP middleware: {cls_name}")
                 component_registrations.append(f"mcp.add_middleware({cls_name}())")
             component_registrations.append("")
 
@@ -1343,7 +1350,14 @@ class CodeGenerator:
                 middleware_setup.append("    from golf.telemetry.instrumentation import SessionTracingMiddleware")
                 middleware_list.append("Middleware(SessionTracingMiddleware)")
 
-            if middleware_setup:
+            # Add custom Starlette HTTP middleware (e.g., CacheControlMiddleware)
+            # These are wrapped in Middleware() and passed to mcp.run(), not mcp.add_middleware()
+            if starlette_middleware:
+                middleware_setup.append("    from starlette.middleware import Middleware")
+                for cls_name in starlette_middleware:
+                    middleware_list.append(f"Middleware({cls_name})")
+
+            if middleware_setup or starlette_middleware:
                 main_code.extend(middleware_setup)
                 main_code.append(f"    middleware = [{', '.join(middleware_list)}]")
                 main_code.append("")
@@ -1405,7 +1419,14 @@ class CodeGenerator:
                 middleware_setup.append("    from golf.telemetry.instrumentation import SessionTracingMiddleware")
                 middleware_list.append("Middleware(SessionTracingMiddleware)")
 
-            if middleware_setup:
+            # Add custom Starlette HTTP middleware (e.g., CacheControlMiddleware)
+            # These are wrapped in Middleware() and passed to mcp.run(), not mcp.add_middleware()
+            if starlette_middleware:
+                middleware_setup.append("    from starlette.middleware import Middleware")
+                for cls_name in starlette_middleware:
+                    middleware_list.append(f"Middleware({cls_name})")
+
+            if middleware_setup or starlette_middleware:
                 main_code.extend(middleware_setup)
                 main_code.append(f"    middleware = [{', '.join(middleware_list)}]")
                 main_code.append("")
@@ -1493,11 +1514,16 @@ class CodeGenerator:
         with open(server_file, "w") as f:
             f.write(code)
 
-    def _discover_middleware_classes(self, project_path: Path) -> list[str]:
-        """Discover middleware classes from middleware.py file."""
+    def _discover_middleware_classes(self, project_path: Path) -> dict[str, list[str]]:
+        """Discover middleware classes from middleware.py file.
+
+        Returns a dict with two keys:
+        - 'fastmcp': List of FastMCP middleware class names (use mcp.add_middleware())
+        - 'starlette': List of Starlette HTTP middleware class names (use middleware=[])
+        """
         middleware_path = project_path / "middleware.py"
         if not middleware_path.exists():
-            return []
+            return {"fastmcp": [], "starlette": []}
 
         try:
             # Save current directory and path
@@ -1513,25 +1539,39 @@ class CodeGenerator:
 
             spec = importlib.util.spec_from_file_location("middleware", middleware_path)
             if spec is None or spec.loader is None:
-                return []
+                return {"fastmcp": [], "starlette": []}
             middleware_module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(middleware_module)
 
-            # Auto-discover middleware classes using duck typing
-            middleware_classes = []
+            # Auto-discover middleware classes, distinguishing between FastMCP and Starlette
+            fastmcp_middleware = []
+            starlette_middleware = []
+
+            # FastMCP middleware methods (MCP protocol level)
+            fastmcp_methods = ["on_message", "on_request", "on_call_tool", "on_read_resource", "on_get_prompt", "on_initialize"]
+            # Starlette/ASGI middleware method (HTTP level)
+            starlette_method = "dispatch"
+
             for name, obj in inspect.getmembers(middleware_module, inspect.isclass):
                 # Skip classes that are not defined in this module (imported classes)
                 if obj.__module__ != middleware_module.__name__:
                     continue
 
-                # Check if class actually implements middleware methods (not just inherits them)
-                middleware_methods = ["on_message", "on_request", "on_call_tool", "dispatch"]
-                has_implemented_method = any(method in obj.__dict__ for method in middleware_methods)
-                if has_implemented_method:
-                    middleware_classes.append(name)
-                    console.print(f"[green]Discovered middleware: {name}[/green]")
+                # Check if class implements FastMCP middleware methods
+                has_fastmcp_method = any(method in obj.__dict__ for method in fastmcp_methods)
+                # Check if class implements Starlette dispatch method
+                has_dispatch_method = starlette_method in obj.__dict__
 
-            return middleware_classes
+                if has_fastmcp_method and not has_dispatch_method:
+                    # Pure FastMCP middleware
+                    fastmcp_middleware.append(name)
+                    console.print(f"[green]Discovered FastMCP middleware: {name}[/green]")
+                elif has_dispatch_method:
+                    # Starlette/ASGI HTTP middleware (dispatch method indicates HTTP-level)
+                    starlette_middleware.append(name)
+                    console.print(f"[green]Discovered Starlette HTTP middleware: {name}[/green]")
+
+            return {"fastmcp": fastmcp_middleware, "starlette": starlette_middleware}
 
         except Exception as e:
             console.print(f"[yellow]Warning: Could not load middleware.py: {e}[/yellow]")
@@ -1555,7 +1595,7 @@ class CodeGenerator:
             except Exception:
                 pass
 
-            return []
+            return {"fastmcp": [], "starlette": []}
 
         finally:
             # Always restore original directory and path
